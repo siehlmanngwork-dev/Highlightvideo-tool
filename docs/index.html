@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spielschnitt – Einsatzzeit- und Highlight-Videos aus GoPro-Aufnahmen</title>
+<meta name="description" content="Kostenlose Windows-App: macht aus GoPro-Basketballaufnahmen automatisch ein Einsatzzeit- und ein Highlight-Video.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏀</text></svg>">
+<style>
+  :root { --bg:#fff7ec; --ink:#2b2140; --muted:#7a6f8c; --orange:#ff7a1a; --orange-d:#e5600a; --line:#f0e3d0;
+          --green-l:#dcfce7; --yellow-l:#fef9c3; --blue-l:#dbeafe; --purple-l:#ede9fe; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:18px/1.55 "Segoe UI", system-ui, sans-serif;
+         background-image:radial-gradient(circle at 10% 0, #ffe4c7 0 220px, transparent 221px),
+                          radial-gradient(circle at 95% 60%, #e5dcff 0 200px, transparent 201px); }
+  .wrap { max-width:980px; margin:0 auto; padding:40px 22px 60px; }
+  .hero { text-align:center; padding:30px 0 10px; }
+  .ball { font-size:76px; display:inline-block; animation:b 2.4s ease-in-out infinite; }
+  @keyframes b { 50% { transform:translateY(-10px) rotate(25deg); } }
+  h1 { font-size:46px; margin:6px 0 8px; letter-spacing:-.5px; }
+  .lead { font-size:21px; color:var(--muted); max-width:680px; margin:0 auto 28px; }
+  .dl { display:inline-flex; flex-direction:column; align-items:center; gap:2px; background:var(--orange); color:#fff;
+        text-decoration:none; font-weight:800; font-size:24px; padding:18px 38px; border-radius:20px;
+        box-shadow:0 6px 0 var(--orange-d); transition:transform .1s; }
+  .dl:hover { filter:brightness(1.05); } .dl:active { transform:translateY(4px); box-shadow:0 2px 0 var(--orange-d); }
+  .dl small { font-weight:600; font-size:14px; opacity:.9; }
+  .sub { color:var(--muted); font-size:14px; margin-top:14px; }
+  .sub a { color:var(--muted); }
+  h2 { font-size:30px; margin:56px 0 18px; text-align:center; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:14px; }
+  .card { background:#fff; border-radius:22px; padding:20px; box-shadow:0 6px 0 rgba(43,33,64,.05), 0 10px 30px rgba(43,33,64,.07); }
+  .card .n { width:34px; height:34px; border-radius:50%; background:var(--orange); color:#fff; display:grid; place-items:center; font-weight:800; }
+  .card .i { font-size:34px; margin:10px 0 4px; }
+  .card b { display:block; font-size:19px; }
+  .card p { margin:4px 0 0; font-size:15px; color:var(--muted); }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .box { border-radius:22px; padding:22px 24px; }
+  .box h3 { margin:0 0 8px; font-size:21px; }
+  .box ol, .box ul { margin:0; padding-left:22px; }
+  .g { background:var(--green-l); } .y { background:var(--yellow-l); } .b { background:var(--blue-l); } .p { background:var(--purple-l); }
+  kbd { background:#fff; border-radius:6px; padding:1px 8px; font-family:inherit; font-weight:700; box-shadow:0 2px 0 #d6cbe6; }
+  footer { margin-top:60px; text-align:center; color:var(--muted); font-size:14px; }
+  footer a { color:var(--muted); }
+  @media (max-width:700px) { h1 { font-size:36px; } .two { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="hero">
+    <div class="ball">🏀</div>
+    <h1>Spielschnitt</h1>
+    <p class="lead">Macht aus langen GoPro-Aufnahmen eines Basketballspiels automatisch zwei Videos:
+      <b>die ganze Einsatzzeit</b> ohne Pausen und <b>die Highlights</b>. Die Kamera folgt dabei von selbst dem Spiel.</p>
+    <a class="dl" id="dl" href="https://github.com/siehlmanngwork-dev/Highlightvideo-tool/releases/latest/download/SpielschnittSetup.exe">
+      ⬇ Kostenlos herunterladen<small>für Windows 10 und 11 · SpielschnittSetup.exe</small></a>
+    <div class="sub">Alles läuft auf deinem PC, nichts wird hochgeladen ·
+      <a href="https://github.com/siehlmanngwork-dev/Highlightvideo-tool/releases">alle Versionen</a> ·
+      <a href="https://github.com/siehlmanngwork-dev/Highlightvideo-tool">Quellcode</a></div>
+  </section>
+
+  <h2>So einfach geht's</h2>
+  <div class="cards">
+    <div class="card"><div class="n">1</div><div class="i">📁</div><b>Spiel wählen</b><p>Ordner mit den Videos eines Spiels auswählen.</p></div>
+    <div class="card"><div class="n">2</div><div class="i">🎞️</div><b>Sichtkopien</b><p>Kleine Kopien zum flüssigen Ansehen werden erstellt.</p></div>
+    <div class="card"><div class="n">3</div><div class="i">🏷️</div><b>Markieren</b><p>Mit <kbd>E</kbd> <kbd>A</kbd> <kbd>H</kbd> markieren: rein, raus, Highlight.</p></div>
+    <div class="card"><div class="n">4</div><div class="i">👀</div><b>Vorschau</b><p>Ergebnis ansehen und bei Bedarf korrigieren.</p></div>
+    <div class="card"><div class="n">5</div><div class="i">🎬</div><b>Videos erstellen</b><p>Fertige Videos in 1920×1080, ganz automatisch.</p></div>
+  </div>
+
+  <h2>Installation</h2>
+  <div class="two">
+    <div class="box g">
+      <h3>⬇ In 4 Schritten</h3>
+      <ol>
+        <li><b>SpielschnittSetup.exe</b> herunterladen und doppelklicken.</li>
+        <li>Kommt „Der Computer wurde durch Windows geschützt“: <b>Weitere Informationen → Trotzdem ausführen</b>.</li>
+        <li>Den Schritten folgen. Administratorrechte sind nicht nötig.</li>
+        <li><b>Spielschnitt</b> im Startmenü oder auf dem Desktop starten.</li>
+      </ol>
+    </div>
+    <div class="box y">
+      <h3>💡 Gut zu wissen</h3>
+      <ul>
+        <li>Ein Ordner pro Spiel, nur mit den Videos dieses Spiels.</li>
+        <li>Die Originalvideos werden nie verändert.</li>
+        <li>Fertige Videos dauern ca. 30–60 Minuten pro Video, der PC kann dabei weiterlaufen.</li>
+        <li>Abgebrochen? Einfach nochmal starten, fertige Teile bleiben erhalten.</li>
+      </ul>
+    </div>
+    <div class="box b">
+      <h3>✂ Korrigieren</h3>
+      <p style="margin:0">In der Vorschau kannst du Stellen rausschneiden oder zurückholen, die Kamera festmachen oder das ganze Spielfeld zeigen.</p>
+    </div>
+    <div class="box p">
+      <h3>🖥️ Voraussetzungen</h3>
+      <p style="margin:0">Windows 10 oder 11 (64 Bit). Alles andere ist schon im Setup enthalten.</p>
+    </div>
+  </div>
+
+  <footer>
+    Spielschnitt ist Open Source (GPLv3) · enthält <a href="https://ffmpeg.org">FFmpeg</a> (GPLv3) ·
+    <a href="https://github.com/siehlmanngwork-dev/Highlightvideo-tool#readme">Anleitung & Hilfe</a>
+  </footer>
+</div>
+</body>
+</html>

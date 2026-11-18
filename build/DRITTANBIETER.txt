@@ -1,0 +1,13 @@
+Spielschnitt - Hinweise zu mitgelieferter Software
+==================================================
+
+1. FFmpeg (Ordner "ffmpeg": ffmpeg.exe, ffprobe.exe)
+   Windows-Build von gyan.dev (https://www.gyan.dev/ffmpeg/builds/).
+   FFmpeg steht unter der GNU General Public License Version 3 (GPLv3),
+   der vollstaendige Lizenztext liegt in ffmpeg\LICENSE.txt.
+   Quellcode: https://ffmpeg.org/download.html
+   bzw. die passende Version unter https://github.com/FFmpeg/FFmpeg
+   Spielschnitt ruft ffmpeg nur als eigenstaendiges Programm auf.
+
+2. Python-Laufzeit (eingebettet ueber PyInstaller)
+   Python Software Foundation License, https://docs.python.org/3/license.html
