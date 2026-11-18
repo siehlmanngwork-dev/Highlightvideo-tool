@@ -1,0 +1,13 @@
+# Build-Ergebnisse (SpielschnittSetup.exe gehoert in ein GitHub Release, nicht ins Repo)
+build/dist/
+build/work/
+build/out/
+build/build.log
+
+# Lokale Einstellungen und Python-Cache
+letzter_ordner.txt
+__pycache__/
+*.pyc
+
+# Windows-Verknuepfungen
+*.lnk
