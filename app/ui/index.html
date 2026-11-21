@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Spielschnitt</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏀</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="ball">🏀</span> Spielschnitt <span class="ver" id="ver"></span></div>
+  <button class="folderchip" id="folderchip" title="Spielordner wechseln">📁 <span id="foldername">Noch kein Spiel ausgewählt</span></button>
+  <div class="minijob prepchip" id="prepchip" hidden title="Läuft im Hintergrund – du kannst normal weitermachen">
+    <span class="spin">⚙️</span> <span id="preplabel"></span>
+    <div class="minibar"><div id="prepfill"></div></div>
+  </div>
+  <div class="minijob" id="minijob" hidden>
+    <span class="spin">⚙️</span> <span id="minilabel"></span>
+    <div class="minibar"><div id="minifill"></div></div>
+  </div>
+</header>
+
+<nav class="steps" id="steps">
+  <button class="step" data-step="1"><span class="num">1</span><span class="ico">📁</span><span class="lbl">Spiel wählen</span></button>
+  <button class="step" data-step="2"><span class="num">2</span><span class="ico">🖼️</span><span class="lbl">Bildausschnitt</span></button>
+  <button class="step" data-step="3"><span class="num">3</span><span class="ico">🏷️</span><span class="lbl">Markieren</span></button>
+  <button class="step" data-step="4"><span class="num">4</span><span class="ico">👀</span><span class="lbl">Vorschau</span><span class="opt">freiwillig</span></button>
+  <button class="step" data-step="5"><span class="num">5</span><span class="ico">🎬</span><span class="lbl">Videos erstellen</span></button>
+</nav>
+
+<div class="banner" id="noffmpeg" hidden>⚠️ ffmpeg wurde nicht gefunden. Bitte einen Erwachsenen fragen: ffmpeg muss installiert sein.</div>
+
+<main>
+  <!-- 1 Spiel waehlen -->
+  <section class="view" data-view="1">
+    <div class="hero">
+      <div>
+        <h1>Welches Spiel willst du schneiden?</h1>
+        <p class="lead">Wähle den Ordner, in dem die Videos von <b>einem</b> Spiel liegen.</p>
+      </div>
+      <button class="big primary" id="choose">📁 Spielordner auswählen</button>
+    </div>
+    <div id="folderinfo"></div>
+    <div class="nextrow"><button class="big go" data-goto="2" id="next1" disabled>Weiter zu Schritt 2 →</button></div>
+  </section>
+
+  <!-- 2 Bildausschnitt -->
+  <section class="view" data-view="2">
+    <div class="hero">
+      <div>
+        <h1>Was soll im Video zu sehen sein?</h1>
+        <p class="lead">Der <b style="color:#ca8a04">gelbe Rahmen</b> ist das, was man im fertigen Video sieht. Schieb ihn hoch oder runter
+          und mach ihn größer oder kleiner, bis alles Wichtige drin ist (Korb, Spielfeld, Ecken).<br>
+          Mit den <b>grauen Griffen</b> links und rechts legst du fest, wie weit die Kamera schwenken darf. Was dahinter liegt, wird nie gezeigt.</p>
+      </div>
+    </div>
+    <div class="bedit">
+      <div class="bstage" id="bstage">
+        <img id="bimg" alt="Standbild aus dem Video" draggable="false">
+        <div class="bload" id="bload">Standbild wird geladen …</div>
+        <div class="bshade l" id="bshadeL"></div><div class="bshade r" id="bshadeR"></div>
+        <div class="bhandle" id="bhandleL" title="So weit darf die Kamera nach links"></div>
+        <div class="bhandle" id="bhandleR" title="So weit darf die Kamera nach rechts"></div>
+        <div class="bwin" id="bwin" title="Ziehen = verschieben"><span class="btag">So sieht man es im Video</span><div class="bcorner" id="bcorner" title="Ziehen = größer/kleiner"></div></div>
+      </div>
+      <aside class="bside">
+        <label class="bfield">Standbild aus <select id="bvid"></select></label>
+        <label class="bfield">Stelle im Video <span id="btimetxt" class="muted"></span>
+          <input type="range" id="btime" min="0" max="0" value="0"></label>
+        <label class="bfield">🔍 Größe des Rahmens
+          <div class="slide"><span>näher</span><input type="range" id="bzoom" min="30" max="100" value="56"><span>alles</span></div></label>
+        <div class="tip" id="binfo"></div>
+        <div class="row"><button class="pill" id="bfull">🔭 Ganzes Bild</button><button class="pill" id="bstd">↺ Standard</button></div>
+        <button class="big primary" id="bsave" disabled>💾 Speichern</button>
+        <div class="saved" id="bsaved"></div>
+        <div class="muted" style="font-size:14px">💡 Tipp: Nimm eine Stelle, an der man das ganze Spielfeld gut sieht. Die Einstellung gilt für alle Videos dieses Spiels.</div>
+      </aside>
+    </div>
+    <div class="nextrow"><button class="big go" id="bnext">Weiter zum Markieren →</button></div>
+  </section>
+
+  <!-- 3 Markieren -->
+  <section class="view" data-view="3">
+    <div class="marker">
+      <div class="mleft">
+        <div class="vidpick" id="vidpick"></div>
+        <div class="stage" id="stage">
+          <video id="mv" preload="auto"></video>
+          <div class="empty" id="mempty">👈 Wähle oben ein Video aus</div>
+          <div class="courtstatus" id="courtstatus"></div>
+          <div class="flash" id="flash"></div>
+        </div>
+        <div class="tl" id="tl" title="Klicken = dorthin springen. Grün = auf dem Feld, Stern = Highlight"></div>
+        <div class="transport">
+          <button class="pill" data-seek="-5">⏪ 5 s</button>
+          <button class="pill" data-seek="-1">◀ 1 s</button>
+          <button class="pill play" id="playbtn">▶ Abspielen</button>
+          <button class="pill" data-seek="1">1 s ▶</button>
+          <button class="pill" data-seek="5">5 s ⏩</button>
+          <span class="time" id="now">00:00:00</span>
+          <span class="speed">Tempo
+            <button class="pill sm" data-rate="1">1×</button><button class="pill sm" data-rate="1.5">1,5×</button><button class="pill sm" data-rate="2">2×</button><button class="pill sm" data-rate="3">3×</button>
+          </span>
+        </div>
+      </div>
+      <aside class="mright">
+        <div class="markbtns">
+          <button class="mbtn in" data-mark="IN"><b>🟢 Rein</b><small>Taste E · er kommt aufs Feld</small></button>
+          <button class="mbtn out" data-mark="OUT"><b>🔴 Raus</b><small>Taste A · er geht runter</small></button>
+          <button class="mbtn hl" data-mark="HL"><b>⭐ Highlight</b><small>Taste H · tolle Szene!</small></button>
+          <button class="mbtn undo" id="undo"><b>↶ Löschen</b><small>Taste Z · nächste Markierung weg</small></button>
+        </div>
+        <div class="tip">💡 Ist er schon am Anfang auf dem Feld? Dann brauchst du kein <b>Rein</b>. Bleibt er bis zum Ende drin, brauchst du kein <b>Raus</b>. Pausen musst du nicht markieren.</div>
+        <div class="sum" id="msum"></div>
+        <ul class="marks" id="marks"></ul>
+        <div class="clipset">⭐ Highlight-Länge: <input type="number" id="pre" min="0" max="60" value="8"> s davor,
+          <input type="number" id="post" min="0" max="60" value="3"> s danach</div>
+        <div class="saved" id="saved"></div>
+      </aside>
+    </div>
+    <div class="nextrow"><button class="big go" data-goto="4">Weiter zur Vorschau →</button><button class="big ghost" data-goto="5">Vorschau überspringen</button></div>
+  </section>
+
+  <!-- 4 Vorschau -->
+  <section class="view" data-view="4">
+    <div class="hero">
+      <div>
+        <h1>Vorschau anschauen <span class="tag">freiwillig</span></h1>
+        <p class="lead">Hier siehst du klein, was am Ende im Video ist. Pausen schneidet der Computer selbst heraus.
+          Ist etwas falsch? Dann kannst du es unten korrigieren.<br>
+          <span class="muted">Dauer: ein paar Minuten pro Video.</span></p>
+      </div>
+      <button class="big primary" data-run="vorschau" id="runprev">▶ Vorschau machen</button>
+    </div>
+    <div class="jobbox" data-job="vorschau"></div>
+    <div class="stalenote" id="stalenote" hidden>🔄 Du hast etwas geändert. Klick oben auf <b>„Vorschau neu machen“</b>, um es zu sehen.</div>
+    <div class="preview">
+      <div class="prevlist" id="prevlist"></div>
+      <div class="prevmain">
+        <div class="prevplayer">
+          <video id="pv" controls></video>
+          <div class="empty" id="pvempty">Noch keine Vorschau da.</div>
+          <div class="pvmode" id="pvmode" hidden>✂ Du siehst eine <b>rausgeschnittene</b> Stelle
+            <button class="pill sm" id="pvback">Zurück zur Vorschau</button></div>
+        </div>
+        <div class="fixpanel" id="fixpanel" hidden>
+          <div class="fixhead">
+            <b>✏️ Korrigieren</b>
+            <span class="legend"><i class="lg in"></i>im Video <i class="lg cut"></i>rausgeschnitten <i class="lg bench"></i>Bank</span>
+            <span class="otime">Im Originalvideo: <b id="otime">--:--</b></span>
+          </div>
+          <div class="cutbar" id="cutbar" title="Grün anklicken = dort hinspringen. Grau anklicken = rausgeschnittene Stelle auswählen"></div>
+          <div class="selrow">
+            <button class="pill" id="selstart">⟦ Start hier</button>
+            <button class="pill" id="selend">Ende hier ⟧</button>
+            <span class="sel" id="seltext">Wähle eine Stelle: Start und Ende setzen oder ein graues Stück anklicken.</span>
+          </div>
+          <div class="fixbtns">
+            <button class="fbtn cut" data-fix="schneiden"><b>✂ Rausschneiden</b><small>kommt nicht ins Video</small></button>
+            <button class="fbtn keep" data-fix="behalten"><b>✚ Wieder rein</b><small>rausgeschnittene Stelle zurückholen</small></button>
+            <button class="fbtn cam" id="camopen"><b>🎥 Kamera fest</b><small>Kamera bleibt an einer Stelle</small></button>
+            <button class="fbtn wide" data-fix="weit"><b>🔭 Ganzes Feld</b><small>ohne Kameraschwenk, alles drauf</small></button>
+          </div>
+          <div class="campick" id="campick" hidden>
+            <div class="camframe"><img id="camv" alt=""><div class="camwin" id="camwin"></div></div>
+            <div class="camctl">
+              <div>Wohin soll die Kamera schauen?</div>
+              <div class="slide"><span>⬅ links</span><input type="range" id="campos" min="0" max="1000" value="500"><span>rechts ➡</span></div>
+              <div class="row"><button class="big primary small" id="camok">✓ Kamera hier festmachen</button>
+                <button class="big ghost small" id="camcancel">Abbrechen</button></div>
+            </div>
+          </div>
+          <ul class="fixlist" id="fixlist"></ul>
+        </div>
+      </div>
+    </div>
+    <div class="nextrow"><button class="big go" data-goto="5">Weiter zu den fertigen Videos →</button></div>
+  </section>
+
+  <!-- 5 Videos erstellen -->
+  <section class="view" data-view="5">
+    <div class="hero">
+      <div>
+        <h1>Fertige Videos erstellen</h1>
+        <p class="lead">Jetzt macht der Computer die richtigen Videos in voller Qualität:
+          <b>die ganze Spielzeit</b> und <b>die Highlights</b>.</p>
+      </div>
+      <button class="big primary" data-run="videos" id="runvideos">🎬 Videos erstellen</button>
+    </div>
+    <div class="notes">
+      <div class="note">⏱️ Das dauert lange: etwa <b>30–60 Minuten pro Video</b>. Den Computer bitte nicht ausschalten.</div>
+      <div class="note">🧹 Danach wird aufgeräumt: Markierungen, Korrekturen, Vorschauen und Zwischendateien werden gelöscht. Die Originalvideos bleiben immer erhalten.</div>
+    </div>
+    <div id="unmarked"></div>
+    <div class="note prepnote" id="prepnote"></div>
+    <div class="jobbox" data-job="videos"></div>
+    <div id="results"></div>
+  </section>
+</main>
+
+<div class="modal" id="modal" hidden>
+  <div class="modalbox">
+    <p id="modaltext"></p>
+    <div class="row"><button class="big primary" id="modalyes">Ja</button><button class="big ghost" id="modalno">Abbrechen</button></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
