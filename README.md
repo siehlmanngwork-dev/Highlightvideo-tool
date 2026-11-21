@@ -41,11 +41,14 @@ Der Ordnername wird zum Namen der fertigen Videos.
 
 | Schritt | Was passiert | Dauer |
 |---|---|---|
-| **1 · Spiel wählen** | Spielordner auswählen. Die App zeigt alle Videos und was schon erledigt ist. | – |
-| **2 · Sichtkopien** | Kleine Kopien der Videos, damit man flüssig markieren kann. | ca. 5–15 Min pro Video |
+| **1 · Spiel wählen** | Spielordner auswählen. Die App zeigt alle Videos und bereitet sie sofort im Hintergrund vor. | – |
+| **2 · Bildausschnitt** | Festlegen, was im Video zu sehen sein soll: gelber Rahmen (Größe und Höhe) und wie weit die Kamera schwenken darf. Gilt für das ganze Spiel. | 1 Minute |
 | **3 · Markieren** | Video ansehen und markieren, wann der Spieler aufs Feld geht, runtergeht und was ein Highlight ist. Wird automatisch gespeichert. | so lange wie du schaust |
 | **4 · Vorschau** *(freiwillig)* | Kleine Vorschau der Einsatzzeit ansehen und bei Bedarf korrigieren (siehe unten). | ein paar Minuten |
 | **5 · Videos erstellen** | Fertige Videos in voller Qualität. Danach wird aufgeräumt. | ca. 30–60 Min pro Video |
+
+Während du Bildausschnitt und Markierungen setzt, misst die App im Hintergrund schon die Bewegung im Video.
+Am Ende musst du nur noch einmal auf **Videos erstellen** klicken.
 
 Am Ende liegen im Spielordner nur noch:
 
@@ -153,9 +156,10 @@ Ergebnis: `build\out\SpielschnittSetup.exe`. Das Skript packt die App mit PyInst
 | Datei | Inhalt |
 |---|---|
 | `marker_<Video>.txt` | Markierungen aus Schritt 3 (`REIN`/`RAUS`/`HL` + Zeit) |
+| `bildausschnitt.json` | Bildausschnitt aus Schritt 2 (`crop_w`, `crop_y`, `x_min`, `x_max`, relativ zum entzerrten Bild) |
 | `korrekturen.txt` | Korrekturen aus Schritt 4, siehe unten |
 | `Vorschau_V1_<Video>.mp4`, `Schnittliste_…txt` | Vorschau und Schnittübersicht |
-| `_arbeit\` | Sichtkopien, Bewegungsanalyse, Zwischenteile, `log.txt` |
+| `_arbeit\` | Bewegungsmessung, Zwischenteile, `log.txt`, ggf. Sichtkopien |
 
 `korrekturen.txt` (Zeiten im Originalvideo, spätere Zeilen gewinnen):
 
@@ -166,7 +170,9 @@ GX010540 kamera 0.400: 05:10.0-05:25.0     (0 = ganz links, 1 = ganz rechts)
 GX010540 weit: 22:00.0-22:12.0
 ```
 
-Wichtige Einstellungen stehen oben in `spielschnitt.py`, zum Beispiel Linsenkorrektur (`LENS`), Bildausschnitt (`CROP_W`, `CROP_Y`), Kamerageschwindigkeit (`CAM_SPEED`) und Pausenerkennung (`STOP_REL`, `STOP_MIN`).
+**Sichtkopien** (kleine Kopien der Videos) erstellt die App nur noch, wenn der PC die Originalvideos (GoPro: 4K HEVC) nicht direkt abspielen kann. Das prüft sie beim ersten Start selbst.
+
+Wichtige Einstellungen stehen oben in `spielschnitt.py`, zum Beispiel Linsenkorrektur (`LENS`), Standard-Bildausschnitt (`CROP_W`, `CROP_Y`), Kamerageschwindigkeit (`CAM_SPEED`) und Pausenerkennung (`STOP_REL`, `STOP_MIN`).
 
 ---
 

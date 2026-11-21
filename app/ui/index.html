@@ -9,8 +9,12 @@
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="ball">🏀</span> Spielschnitt</div>
+  <div class="brand"><span class="ball">🏀</span> Spielschnitt <span class="ver" id="ver"></span></div>
   <button class="folderchip" id="folderchip" title="Spielordner wechseln">📁 <span id="foldername">Noch kein Spiel ausgewählt</span></button>
+  <div class="minijob prepchip" id="prepchip" hidden title="Läuft im Hintergrund – du kannst normal weitermachen">
+    <span class="spin">⚙️</span> <span id="preplabel"></span>
+    <div class="minibar"><div id="prepfill"></div></div>
+  </div>
   <div class="minijob" id="minijob" hidden>
     <span class="spin">⚙️</span> <span id="minilabel"></span>
     <div class="minibar"><div id="minifill"></div></div>
@@ -19,7 +23,7 @@
 
 <nav class="steps" id="steps">
   <button class="step" data-step="1"><span class="num">1</span><span class="ico">📁</span><span class="lbl">Spiel wählen</span></button>
-  <button class="step" data-step="2"><span class="num">2</span><span class="ico">🎞️</span><span class="lbl">Sichtkopien</span></button>
+  <button class="step" data-step="2"><span class="num">2</span><span class="ico">🖼️</span><span class="lbl">Bildausschnitt</span></button>
   <button class="step" data-step="3"><span class="num">3</span><span class="ico">🏷️</span><span class="lbl">Markieren</span></button>
   <button class="step" data-step="4"><span class="num">4</span><span class="ico">👀</span><span class="lbl">Vorschau</span><span class="opt">freiwillig</span></button>
   <button class="step" data-step="5"><span class="num">5</span><span class="ico">🎬</span><span class="lbl">Videos erstellen</span></button>
@@ -41,19 +45,39 @@
     <div class="nextrow"><button class="big go" data-goto="2" id="next1" disabled>Weiter zu Schritt 2 →</button></div>
   </section>
 
-  <!-- 2 Sichtkopien -->
+  <!-- 2 Bildausschnitt -->
   <section class="view" data-view="2">
     <div class="hero">
       <div>
-        <h1>Sichtkopien machen</h1>
-        <p class="lead">Der Computer macht kleine Kopien von deinen Videos. Damit kannst du gleich ganz flott markieren.<br>
-          <span class="muted">Dauer: etwa 5–15 Minuten pro Video. Du kannst so lange etwas anderes machen.</span></p>
+        <h1>Was soll im Video zu sehen sein?</h1>
+        <p class="lead">Der <b style="color:#ca8a04">gelbe Rahmen</b> ist das, was man im fertigen Video sieht. Schieb ihn hoch oder runter
+          und mach ihn größer oder kleiner, bis alles Wichtige drin ist (Korb, Spielfeld, Ecken).<br>
+          Mit den <b>grauen Griffen</b> links und rechts legst du fest, wie weit die Kamera schwenken darf. Was dahinter liegt, wird nie gezeigt.</p>
       </div>
-      <button class="big primary" data-run="sichtkopien">▶ Sichtkopien starten</button>
     </div>
-    <div id="sichtlist" class="cards"></div>
-    <div class="jobbox" data-job="sichtkopien"></div>
-    <div class="nextrow"><button class="big go" data-goto="3" id="next2">Weiter zum Markieren →</button></div>
+    <div class="bedit">
+      <div class="bstage" id="bstage">
+        <img id="bimg" alt="Standbild aus dem Video" draggable="false">
+        <div class="bload" id="bload">Standbild wird geladen …</div>
+        <div class="bshade l" id="bshadeL"></div><div class="bshade r" id="bshadeR"></div>
+        <div class="bhandle" id="bhandleL" title="So weit darf die Kamera nach links"></div>
+        <div class="bhandle" id="bhandleR" title="So weit darf die Kamera nach rechts"></div>
+        <div class="bwin" id="bwin" title="Ziehen = verschieben"><span class="btag">So sieht man es im Video</span><div class="bcorner" id="bcorner" title="Ziehen = größer/kleiner"></div></div>
+      </div>
+      <aside class="bside">
+        <label class="bfield">Standbild aus <select id="bvid"></select></label>
+        <label class="bfield">Stelle im Video <span id="btimetxt" class="muted"></span>
+          <input type="range" id="btime" min="0" max="0" value="0"></label>
+        <label class="bfield">🔍 Größe des Rahmens
+          <div class="slide"><span>näher</span><input type="range" id="bzoom" min="30" max="100" value="56"><span>alles</span></div></label>
+        <div class="tip" id="binfo"></div>
+        <div class="row"><button class="pill" id="bfull">🔭 Ganzes Bild</button><button class="pill" id="bstd">↺ Standard</button></div>
+        <button class="big primary" id="bsave" disabled>💾 Speichern</button>
+        <div class="saved" id="bsaved"></div>
+        <div class="muted" style="font-size:14px">💡 Tipp: Nimm eine Stelle, an der man das ganze Spielfeld gut sieht. Die Einstellung gilt für alle Videos dieses Spiels.</div>
+      </aside>
+    </div>
+    <div class="nextrow"><button class="big go" id="bnext">Weiter zum Markieren →</button></div>
   </section>
 
   <!-- 3 Markieren -->
@@ -139,7 +163,7 @@
             <button class="fbtn wide" data-fix="weit"><b>🔭 Ganzes Feld</b><small>ohne Kameraschwenk, alles drauf</small></button>
           </div>
           <div class="campick" id="campick" hidden>
-            <div class="camframe"><video id="camv" muted preload="auto"></video><div class="camwin" id="camwin"></div></div>
+            <div class="camframe"><img id="camv" alt=""><div class="camwin" id="camwin"></div></div>
             <div class="camctl">
               <div>Wohin soll die Kamera schauen?</div>
               <div class="slide"><span>⬅ links</span><input type="range" id="campos" min="0" max="1000" value="500"><span>rechts ➡</span></div>
@@ -166,9 +190,10 @@
     </div>
     <div class="notes">
       <div class="note">⏱️ Das dauert lange: etwa <b>30–60 Minuten pro Video</b>. Den Computer bitte nicht ausschalten.</div>
-      <div class="note">🧹 Danach wird aufgeräumt: Sichtkopien, Markierungen und Vorschauen werden gelöscht. Die Originalvideos bleiben immer erhalten.</div>
+      <div class="note">🧹 Danach wird aufgeräumt: Markierungen, Korrekturen, Vorschauen und Zwischendateien werden gelöscht. Die Originalvideos bleiben immer erhalten.</div>
     </div>
     <div id="unmarked"></div>
+    <div class="note prepnote" id="prepnote"></div>
     <div class="jobbox" data-job="videos"></div>
     <div id="results"></div>
   </section>

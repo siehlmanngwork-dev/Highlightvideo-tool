@@ -5,9 +5,46 @@
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const media = p => '/media?p=' + encodeURIComponent(p);
 
-  let S = { folder: null, job: {}, ffmpeg: true };   // letzter Zustand vom Server
+  let S = { folder: null, job: {}, prep: {}, ffmpeg: true };   // letzter Zustand vom Server
   let current = 1;
   let wasRunning = false;
+
+  // Kann dieser PC die Originalvideos (GoPro: 4K HEVC) direkt abspielen? Dann braucht es keine Sichtkopien.
+  const HEVC = { ok: null, testing: false, preparedFor: null };
+  const playSrc = v => (HEVC.ok ? v.file : v.sicht);          // Video zum Ansehen/Markieren (oder null)
+  function testHevc(file) {
+    return new Promise(res => {
+      const t = document.createElement('video');
+      let done = false;
+      const fin = ok => { if (done) return; done = true; t.pause(); t.removeAttribute('src'); t.load(); res(ok); };
+      t.muted = true; t.preload = 'auto';
+      t.addEventListener('loadeddata', () => {
+        if (!t.videoWidth) return fin(false);
+        t.play().then(() => setTimeout(() => {
+          const q = t.getVideoPlaybackQuality ? t.getVideoPlaybackQuality() : null;
+          fin((q ? q.totalVideoFrames - q.droppedVideoFrames > 0 : true) && t.currentTime > 0);
+        }, 1200)).catch(() => fin(false));
+      });
+      t.addEventListener('error', () => fin(false));
+      setTimeout(() => fin(false), 10000);
+      t.src = media(file);
+    });
+  }
+  async function ensurePrepared() {
+    const f = S.folder;
+    if (!f || !f.videos.length || f.results.length || S.job.running) return;
+    if (HEVC.ok === null) {
+      if (HEVC.testing) return;
+      HEVC.testing = true;
+      const cached = localStorage.getItem('spielschnitt:hevc');
+      HEVC.ok = cached === '1' ? true : await testHevc(f.videos[0].file);
+      localStorage.setItem('spielschnitt:hevc', HEVC.ok ? '1' : '0');
+      HEVC.testing = false;
+    }
+    if (HEVC.preparedFor === f.path || (S.prep.running && S.prep.folder === f.path)) return;
+    HEVC.preparedFor = f.path;
+    api('/api/prepare', { need_sicht: !HEVC.ok });
+  }
 
   // ------------------------------------------------------------ Server
   async function api(path, body) {
@@ -36,7 +73,7 @@
     const v = vids(), f = S.folder;
     if (!f) return false;
     if (n === 1) return v.length > 0 || f.results.length > 0;
-    if (n === 2) return v.length > 0 && v.every(x => x.sicht);
+    if (n === 2) return !!f.bild_gesetzt;
     if (n === 3) return v.some(x => x.marker && (x.marker.wechsel || x.marker.hl));
     if (n === 4) return v.some(x => x.vorschau);
     if (n === 5) return f.results.length > 0;
@@ -44,13 +81,13 @@
   function stepAllowed(n) {
     if (n === 1) return true;
     if (!S.folder) return false;
-    if (n === 3) return vids().some(x => x.sicht);
     return true;
   }
   function go(n) {
     if (!stepAllowed(n)) return;
     if (current === 3 && n !== 3) { mk.flush(); mk.pause(); }
     if (current === 4 && n !== 4) $('pv').pause();
+    if (n === 2) bild.open();
     current = n;
     $$('.view').forEach(v => v.classList.toggle('show', +v.dataset.view === n));
     render();
@@ -64,14 +101,14 @@
     mk.flush();
     const r = await api('/api/choose', {});
     if (r.error) return tell('😕 ' + esc(r.error));
-    if (r.chosen) { mk.reset(); await refresh(); }
+    if (r.chosen) { mk.reset(); bild.reset(); HEVC.preparedFor = null; await refresh(); go(2); }
   }
   $('choose').onclick = choose;
   $('folderchip').onclick = choose;
 
   const gb = n => (n / 1e9).toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' GB';
   function badgesFor(v) {
-    let b = v.sicht ? '<span class="badge ok">✓ Sichtkopie</span>' : '<span class="badge">Sichtkopie fehlt</span>';
+    let b = playSrc(v) ? '<span class="badge ok">✓ bereit</span>' : '<span class="badge wait">⏳ wird vorbereitet</span>';
     if (v.marker && (v.marker.wechsel || v.marker.hl)) {
       b += '<span class="badge ok">✓ markiert</span>';
       if (v.marker.hl) b += `<span class="badge hl">⭐ ${v.marker.hl}</span>`;
@@ -110,11 +147,6 @@
     if (h !== lastFolderHtml) { $('folderinfo').innerHTML = h; lastFolderHtml = h; }
     $('next1').disabled = !f || !f.videos.length;
 
-    const sl = f && f.videos.length ? f.videos.map(v => `<div class="vcard"><div class="t">${v.sicht ? '✅' : '⏳'} ${esc(v.name)}</div>
-      <div class="s">${v.sicht ? 'Sichtkopie ist fertig' : 'Sichtkopie fehlt noch'}</div></div>`).join('')
-      : '<div class="emptybig">Erst bei Schritt 1 ein Spiel auswählen.</div>';
-    if ($('sichtlist').innerHTML !== sl) $('sichtlist').innerHTML = sl;
-
     const rs = f && f.results.length ? '<h2 style="margin:6px 0 0">🎉 Deine fertigen Videos</h2>' + resultCards(f.results)
       + '<div class="row"><button class="big ghost small" data-open="">📂 Ordner öffnen</button></div>' : '';
     if ($('results').dataset.h !== rs) { $('results').innerHTML = rs; $('results').dataset.h = rs; }
@@ -133,22 +165,24 @@
 
   // ------------------------------------------------------------ Arbeitsschritte
   const JOBNAME = { sichtkopien: 'Sichtkopien', vorschau: 'Vorschau', videos: 'Videos' };
-  const JOBDONE = { sichtkopien: 'Die Sichtkopien sind fertig. Jetzt kannst du markieren.',
+  const JOBDONE = { sichtkopien: 'Die Sichtkopien sind fertig.',
                     vorschau: 'Die Vorschau ist fertig. Schau sie dir unten an.',
                     videos: 'Deine Videos sind fertig!' };
-  const JOBSTEP = { sichtkopien: 2, vorschau: 4, videos: 5 };
+  const JOBSTEP = { sichtkopien: 3, vorschau: 4, videos: 5 };
   const CHEER = ['🏀', '⛹️', '🎬', '🍿', '💪', '🔥', '🏆'];
 
   $$('[data-run]').forEach(b => b.onclick = async () => {
     const kind = b.dataset.run;
     mk.flush();
     if (kind === 'videos' && !await ask('<b>Fertige Videos erstellen?</b><br><br>Das dauert lange (30–60 Minuten pro Video). '
-      + 'Danach werden Sichtkopien, Markierungen und Vorschauen gelöscht. Die Originalvideos bleiben.', 'Ja, los!')) return;
+      + 'Danach werden Markierungen, Korrekturen und Vorschauen gelöscht. Die Originalvideos bleiben.', 'Ja, los!')) return;
     const r = await api('/api/run', { kind });
     if (r.error) return tell('😕 ' + esc(r.error));
     await refresh();
   });
 
+  const prepPct = pr => Math.max(0, Math.min(100, Math.round(((pr.i || 0) + (pr.frac || 0)) / (pr.n || 1) * 100)));
+  const prepLabel = pr => (pr.label || 'Vorbereitung') + ' · ' + prepPct(pr) + '%';
   function fmtDur(s) { s = Math.max(0, Math.round(s)); const m = Math.floor(s / 60); return m ? `${m} Min ${s % 60} s` : `${s} s`; }
   function pct(j) { return Math.max(0, Math.min(100, Math.round(((j.i || 0) + (j.frac || 0)) / (j.n || 1) * 100))); }
   function labelOf(j) {
@@ -161,10 +195,12 @@
     const j = S.job || {};
     $$('[data-run]').forEach(b => b.disabled = !!j.running || !S.folder || !vids().length || !S.ffmpeg);
     $('runvideos').disabled = $('runvideos').disabled || !stepDone(3);
-    const sb = document.querySelector('[data-run="sichtkopien"]'), allSicht = stepDone(2);
-    sb.textContent = allSicht ? '✓ Alle Sichtkopien sind fertig' : '▶ Sichtkopien starten';
-    sb.disabled = sb.disabled || allSicht;
-    $('next2').disabled = !stepAllowed(3);
+    const pr = S.prep || {};
+    const prepNote = pr.running && S.folder && pr.folder === S.folder.path
+      ? `⚙️ Im Hintergrund wird noch vorbereitet (${esc(prepLabel(pr))}). Das wird automatisch mit erledigt.` : '';
+    if ($('prepnote').dataset.h !== prepNote) { $('prepnote').innerHTML = prepNote; $('prepnote').dataset.h = prepNote; }
+    $('prepchip').hidden = !(pr.running && S.folder && pr.folder === S.folder.path) || !!j.running;
+    if (!$('prepchip').hidden) { $('preplabel').textContent = prepLabel(pr); $('prepfill').style.width = prepPct(pr) + '%'; }
     $$('.jobbox').forEach(box => {
       if (box.dataset.job !== j.kind) { box.innerHTML = ''; return; }
       let h;
@@ -217,7 +253,8 @@
   // ------------------------------------------------------------ Vorschau + Korrekturen
   const pv = $('pv');
   const FIX = { schneiden: '✂ Rausschneiden', behalten: '✚ Wieder rein', kamera: '🎥 Kamera fest', weit: '🔭 Ganzes Feld' };
-  const fx = { name: null, t: 0, data: null, fixes: [], cropW: 0.5625, cropY: 0.0972, stale: false, sel: null, mode: 'vorschau' };
+  const fx = { name: null, t: 0, data: null, fixes: [], bild: { crop_w: 0.5625, crop_y: 0.0972, x_min: 0, x_max: 1 },
+               stale: false, sel: null, mode: 'vorschau' };
   const mmss = s => { s = Math.max(0, s); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(Math.floor(s % 60)).padStart(2, '0'); };
   const segsOf = () => (fx.data ? fx.data.segs : []);
   const curVid = () => vids().find(v => v.name === fx.name);
@@ -254,7 +291,7 @@
   function setPlayer(mode, t) {
     const v = curVid();
     fx.mode = mode;
-    const want = mode === 'sicht' ? media(v.sicht) : media(v.vorschau) + '&t=' + v.vorschau_t;
+    const want = mode === 'sicht' ? media(playSrc(v)) : media(v.vorschau) + '&t=' + v.vorschau_t;
     if (pv.dataset.src !== want) { pv.dataset.src = want; pv.src = want; }
     if (t != null) {
       const go = () => { pv.currentTime = t; };
@@ -273,7 +310,7 @@
   async function loadSchnitt() {
     if (!fx.name) return;
     const r = await api('/api/schnitt?name=' + encodeURIComponent(fx.name));
-    fx.data = r.schnitt; fx.fixes = r.fixes || []; fx.cropW = r.crop_w; fx.cropY = r.crop_y; fx.stale = r.stale;
+    fx.data = r.schnitt; fx.fixes = r.fixes || []; if (r.bild) fx.bild = r.bild; fx.stale = r.stale;
     drawFix();
   }
   async function saveFixes() {
@@ -338,7 +375,7 @@
   function jumpTo(t) {
     const p = toPrev(t);
     if (p != null) setPlayer('vorschau', p);
-    else if (curVid() && curVid().sicht) setPlayer('sicht', t);
+    else if (curVid() && playSrc(curVid())) setPlayer('sicht', t);
   }
   pv.addEventListener('timeupdate', movePh);
 
@@ -350,7 +387,7 @@
     const g = gaps().find(([a, b]) => t >= a && t <= b);
     if (g) {
       fx.sel = { a: g[0], b: g[1] };
-      if (curVid().sicht) setPlayer('sicht', g[0]);
+      if (playSrc(curVid())) setPlayer('sicht', g[0]);
       drawFix();
       return;
     }
@@ -366,20 +403,20 @@
 
   // Kamera-Position waehlen: gelber Rahmen = Bildausschnitt
   const camT = () => +$('campos').value / 1000;
+  const camLeft = () => { const b = fx.bild; return b.x_min + camT() * Math.max(0, b.x_max - b.x_min - b.crop_w); };
   function drawCam() {
-    const w = $('camwin'), cw = fx.cropW;
-    w.style.left = (camT() * (1 - cw) * 100) + '%'; w.style.width = (cw * 100) + '%';
-    w.style.top = (fx.cropY * 100) + '%'; w.style.height = (cw * 100) + '%';
+    const w = $('camwin'), b = fx.bild;
+    w.style.left = (camLeft() * 100) + '%'; w.style.width = (b.crop_w * 100) + '%';
+    w.style.top = (b.crop_y * 100) + '%'; w.style.height = (b.crop_w * 100) + '%';
   }
   $('camopen').onclick = () => {
     const s = fx.sel;
     if (!s || s.b == null) return addFix('kamera');          // zeigt den Hinweis
-    const v = curVid();
-    if (v && v.sicht) { const cv = $('camv'); cv.src = media(v.sicht); cv.addEventListener('loadedmetadata', () => { cv.currentTime = (s.a + s.b) / 2; }, { once: true }); }
+    $('camv').src = '/api/frame?name=' + encodeURIComponent(fx.name) + '&t=' + ((s.a + s.b) / 2).toFixed(1);
     $('campos').value = 500; drawCam(); $('campick').hidden = false;
   };
   $('campos').oninput = drawCam;
-  $('camok').onclick = () => addFix('kamera', camT() * (1 - fx.cropW) + fx.cropW / 2);
+  $('camok').onclick = () => addFix('kamera', camLeft() + fx.bild.crop_w / 2);
   $('camcancel').onclick = () => { $('campick').hidden = true; };
 
   function renderPreview() {
@@ -408,6 +445,20 @@
                     OUT: { label: 'RAUS', name: '🔴 Raus', color: '#fca5a5' },
                     HL: { label: 'HL', name: '⭐ Highlight', color: '#fde047' } };
     let name = null, marks = [], hadFile = false, dirty = false, saveTimer = null, flashTimer = null;
+    let rate = 1;                                   // gewaehltes Tempo, gilt auch fuer jedes neu geladene Video
+    // Highlight-Sekunden merken (gelten fuer neue Videos ohne eigene Markierungen, 24 Stunden lang)
+    const CLIPKEY = 'spielschnitt:clip';
+    function rememberClip() {
+      localStorage.setItem(CLIPKEY, JSON.stringify({ pre: +$('pre').value || 0, post: +$('post').value || 0, t: Date.now() }));
+    }
+    function lastClip() {
+      try {
+        const c = JSON.parse(localStorage.getItem(CLIPKEY) || 'null');
+        if (c && Date.now() - c.t < 24 * 3600 * 1000) return c;
+      } catch (e) { /* ignorieren */ }
+      return { pre: 8, post: 3 };
+    }
+    const applyRate = () => { v.defaultPlaybackRate = rate; v.playbackRate = rate; };
 
     const fmt = s => {
       if (!isFinite(s)) return '--:--:--.--';
@@ -479,8 +530,9 @@
       const r = await api('/api/marker?name=' + encodeURIComponent(name));
       if (r.text != null) {
         const p = parse(r.text); marks = p.marks; $('pre').value = p.pre; $('post').value = p.post; hadFile = true;
-      } else { $('pre').value = 8; $('post').value = 3; }
-      v.src = media(vid.sicht);
+      } else { const c = lastClip(); $('pre').value = c.pre; $('post').value = c.post; }
+      v.src = media(playSrc(vid));
+      applyRate();
       $('mempty').hidden = true;
       v.addEventListener('loadedmetadata', draw, { once: true });
       draw(); renderPicker();
@@ -488,7 +540,7 @@
     async function reloadMarks() {           // nach "Videos erstellen" sind Marker evtl. geloescht
       if (!name) return;
       const vid = vids().find(x => x.name === name);
-      if (!vid || !vid.sicht) reset();
+      if (!vid || !playSrc(vid)) reset();
     }
     function reset() {
       name = null; marks = []; hadFile = false; dirty = false;
@@ -556,8 +608,9 @@
       const list = vids();
       const h = list.map(x => {
         const done = x.marker && (x.marker.wechsel || x.marker.hl);
-        return `<button class="vchip ${x.name === name ? 'sel' : ''}" data-vid="${esc(x.name)}" ${x.sicht ? '' : 'disabled title="Sichtkopie fehlt noch"'}>
-          ${done ? '✅' : '🎥'} ${esc(x.name)} ${x.sicht ? '' : '<span class="d">(Sichtkopie fehlt)</span>'}</button>`;
+        const ok = !!playSrc(x);
+        return `<button class="vchip ${x.name === name ? 'sel' : ''}" data-vid="${esc(x.name)}" ${ok ? '' : 'disabled title="Wird gerade vorbereitet"'}>
+          ${done ? '✅' : '🎥'} ${esc(x.name)} ${ok ? '' : '<span class="d">(wird vorbereitet …)</span>'}</button>`;
       }).join('');
       if ($('vidpick').dataset.h !== h) { $('vidpick').innerHTML = h; $('vidpick').dataset.h = h; }
     }
@@ -568,22 +621,24 @@
 
     $('tl').onclick = e => { if (v.duration) { const r = e.currentTarget.getBoundingClientRect(); v.currentTime = (e.clientX - r.left) / r.width * v.duration; } };
     v.addEventListener('timeupdate', () => { $('now').textContent = fmtShort(v.currentTime); movePh(); status(); });
-    v.addEventListener('play', () => $('playbtn').textContent = '⏸ Pause');
+    // Tempo nach jedem Laden und Start erneut setzen (Browser setzen es beim Laden zurueck)
+    v.addEventListener('loadedmetadata', applyRate);
+    v.addEventListener('play', () => { if (v.playbackRate !== rate) applyRate(); $('playbtn').textContent = '⏸ Pause'; });
     v.addEventListener('pause', () => $('playbtn').textContent = '▶ Abspielen');
     v.onclick = () => togglePlay();
     const togglePlay = () => { if (!name) return; v.paused ? v.play() : v.pause(); };
     $('playbtn').onclick = togglePlay;
     $$('[data-seek]').forEach(b => b.onclick = () => { v.currentTime = Math.max(0, v.currentTime + +b.dataset.seek); });
     $$('[data-rate]').forEach(b => b.onclick = () => {
-      v.playbackRate = +b.dataset.rate; $$('[data-rate]').forEach(x => x.classList.toggle('sel', x === b));
+      rate = +b.dataset.rate; applyRate(); $$('[data-rate]').forEach(x => x.classList.toggle('sel', x === b));
     });
     document.querySelector('[data-rate="1"]').classList.add('sel');
     $$('[data-mark]').forEach(b => b.onclick = () => add(b.dataset.mark));
     $('undo').onclick = undoNearest;
-    $('pre').onchange = $('post').onchange = () => { if (name) changed(); };
+    $('pre').onchange = $('post').onchange = () => { rememberClip(); if (name) changed(); };
 
     document.addEventListener('keydown', e => {
-      if (current !== 3 || !$('modal').hidden) return;
+      if (current !== 3 || !$('modal').hidden || !name) return;
       if (e.target.tagName === 'INPUT' || e.ctrlKey || e.altKey || e.metaKey) return;
       const k = e.key.toLowerCase();
       if (k === 'e') add('IN'); else if (k === 'a') add('OUT'); else if (k === 'h') add('HL');
@@ -603,10 +658,119 @@
     return { flush: save, pause: () => v.pause(), reset, reloadMarks, renderPicker, get name() { return name; } };
   })();
 
+  // ------------------------------------------------------------ Bildausschnitt pro Spiel
+  // Gelber Rahmen = was im fertigen Video zu sehen ist (Groesse + Hoehe frei waehlbar, immer 16:9).
+  // Graue Griffe links/rechts = so weit darf die Kamera schwenken; dahinter wird nie etwas gezeigt.
+  const bild = (() => {
+    const st = { videos: [], b: null, std: null, loadedFor: null, vid: null, t: 0, x: null, dirty: false };
+    const img = $('bimg'), stage = $('bstage');
+    const chf = () => st.b.crop_w;                     // Fensterhoehe relativ (16:9-Video)
+
+    async function open() {
+      if (!S.folder) return;
+      if (st.loadedFor === S.folder.path && st.b) { draw(); return; }
+      const r = await api('/api/bild');
+      if (r.error) return;
+      st.videos = r.videos; st.b = r.bild; st.std = r.standard; st.loadedFor = S.folder.path; st.dirty = false;
+      st.vid = st.videos.length ? st.videos[0].name : null;
+      st.t = st.videos.length ? Math.round(st.videos[0].dur * 0.3) : 0;
+      st.x = null;
+      $('bvid').innerHTML = st.videos.map(v => `<option value="${esc(v.name)}">${esc(v.name)}</option>`).join('');
+      const v0 = st.videos[0];
+      $('btime').max = v0 ? Math.floor(v0.dur) : 0; $('btime').value = st.t; $('btimetxt').textContent = mmss(st.t);
+      loadFrame(); draw();
+    }
+    function reset() { st.loadedFor = null; st.b = null; }
+    function loadFrame() {
+      if (!st.vid) return;
+      $('bload').hidden = false;
+      img.onload = () => { $('bload').hidden = true; };
+      img.src = '/api/frame?name=' + encodeURIComponent(st.vid) + '&t=' + st.t;
+    }
+    function clamp(b) {
+      b.crop_w = Math.min(1, Math.max(0.3, b.crop_w));
+      b.crop_y = Math.min(1 - chf(), Math.max(0, b.crop_y));
+      b.x_min = Math.min(1, Math.max(0, b.x_min)); b.x_max = Math.min(1, Math.max(0, b.x_max));
+      if (b.x_max - b.x_min < b.crop_w) {
+        const m = Math.min(1 - b.crop_w / 2, Math.max(b.crop_w / 2, (b.x_min + b.x_max) / 2));
+        b.x_min = m - b.crop_w / 2; b.x_max = m + b.crop_w / 2;
+      }
+    }
+    function winX() {                                  // linke Kante des gelben Rahmens (Vorschau-Position)
+      const b = st.b, lo = b.x_min, hi = b.x_max - b.crop_w;
+      if (st.x == null) st.x = (lo + hi) / 2;
+      st.x = Math.min(hi, Math.max(lo, st.x));
+      return st.x;
+    }
+    function draw() {
+      if (!st.b) return;
+      const b = st.b, P = v => (v * 100) + '%';
+      Object.assign($('bwin').style, { left: P(winX()), width: P(b.crop_w), top: P(b.crop_y), height: P(chf()) });
+      Object.assign($('bshadeL').style, { width: P(b.x_min) });
+      Object.assign($('bshadeR').style, { width: P(1 - b.x_max) });
+      $('bhandleL').style.left = P(b.x_min); $('bhandleR').style.left = P(b.x_max);
+      $('bzoom').value = Math.round(b.crop_w * 100);
+      const full = b.crop_w >= 0.999;
+      $('binfo').innerHTML = full ? 'Ganzes Bild: kein Zoom, keine Kamerabewegung.'
+        : `Zoom: <b>${Math.round(100 / b.crop_w) / 100}×</b> · Die Kamera schwenkt zwischen den grauen Griffen.`;
+      $('bsave').disabled = !st.dirty;
+      $('bsaved').textContent = st.dirty ? '' : (S.folder && S.folder.bild_gesetzt ? '✓ Für dieses Spiel gespeichert' : '');
+    }
+    function changed() { clamp(st.b); st.dirty = true; draw(); }
+
+    // Ziehen: Rahmen verschieben (hoch/runter = Bildausschnitt, links/rechts = nur Probe), Griffe = Schwenkbereich
+    let drag = null;
+    function rel(e) { const r = stage.getBoundingClientRect(); return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]; }
+    stage.addEventListener('pointerdown', e => {
+      if (!st.b) return;
+      const [x, y] = rel(e), t = e.target;
+      if (t.id === 'bhandleL' || t.id === 'bhandleR') drag = { kind: t.id, x0: x };
+      else if (t.id === 'bcorner') drag = { kind: 'zoom', x0: x, w0: st.b.crop_w, left: winX() };
+      else if (t.closest('#bwin')) drag = { kind: 'move', x0: x, y0: y, wx: winX(), cy: st.b.crop_y };
+      else return;
+      stage.setPointerCapture(e.pointerId); e.preventDefault();
+    });
+    stage.addEventListener('pointermove', e => {
+      if (!drag) return;
+      const [x, y] = rel(e), b = st.b;
+      if (drag.kind === 'move') { b.crop_y = drag.cy + (y - drag.y0); st.x = drag.wx + (x - drag.x0); }
+      else if (drag.kind === 'bhandleL') b.x_min = Math.min(x, b.x_max - b.crop_w);
+      else if (drag.kind === 'bhandleR') b.x_max = Math.max(x, b.x_min + b.crop_w);
+      else if (drag.kind === 'zoom') { b.crop_w = Math.max(0.3, Math.min(1, x - drag.left)); st.x = drag.left; }
+      changed();
+    });
+    const end = () => { drag = null; };
+    stage.addEventListener('pointerup', end); stage.addEventListener('pointercancel', end);
+
+    $('bzoom').oninput = () => { const b = st.b, c = winX() + b.crop_w / 2; b.crop_w = +$('bzoom').value / 100;
+      st.x = c - b.crop_w / 2; changed(); };
+    $('bvid').onchange = () => { st.vid = $('bvid').value; const v = st.videos.find(x => x.name === st.vid);
+      $('btime').max = Math.floor(v.dur); st.t = Math.min(st.t, Math.floor(v.dur)); $('btime').value = st.t; loadFrame(); };
+    let tt = null;
+    $('btime').oninput = () => { st.t = +$('btime').value; $('btimetxt').textContent = mmss(st.t);
+      clearTimeout(tt); tt = setTimeout(loadFrame, 250); };
+    $('bfull').onclick = () => { Object.assign(st.b, { crop_w: 1, crop_y: 0, x_min: 0, x_max: 1 }); st.x = 0; changed(); };
+    $('bstd').onclick = () => { st.b = Object.assign({}, st.std); st.x = null; changed(); };
+    $('bsave').onclick = async () => {
+      const r = await api('/api/bild', { bild: st.b });
+      if (r.error) return tell('😕 ' + esc(r.error));
+      st.b = r.bild; st.dirty = false; await refresh(); draw();
+    };
+    $('bnext').onclick = async () => {
+      if (st.dirty && await ask('Den Bildausschnitt für dieses Spiel speichern?', 'Ja, speichern')) $('bsave').onclick();
+      else if (!S.folder.bild_gesetzt && !st.dirty) api('/api/bild', { bild: st.b }).then(refresh);   // Standard bestaetigen
+      go(3);
+    };
+    function render() { if (current === 2 && st.b) draw(); }
+    return { open, reset, render };
+  })();
+
   // ------------------------------------------------------------ Gesamt
   function render() {
     $('noffmpeg').hidden = S.ffmpeg !== false;
-    renderSteps(); renderFolder(); renderJob(); renderPreview(); mk.renderPicker();
+    $('ver').textContent = S.version ? 'v' + S.version : '';
+    renderSteps(); renderFolder(); renderJob(); renderPreview(); mk.renderPicker(); bild.render();
+    ensurePrepared();
   }
 
   window.addEventListener('beforeunload', e => {
@@ -617,7 +781,7 @@
   (async () => {
     await refresh();
     const j = S.job || {};
-    go(j.running ? JOBSTEP[j.kind] : (S.folder && S.folder.videos.length ? (stepDone(2) ? 3 : 2) : 1));
+    go(j.running ? JOBSTEP[j.kind] : (S.folder && S.folder.videos.length && !S.folder.results.length ? (stepDone(2) ? 3 : 2) : 1));
     setInterval(refresh, 1000);
   })();
 })();

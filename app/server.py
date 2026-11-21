@@ -14,6 +14,7 @@ TOOL = os.path.dirname(APP)
 sys.path.insert(0, TOOL)
 import spielschnitt as ss  # noqa: E402
 
+VERSION = "2.0.0"
 UI = os.path.join(APP, "ui")
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
          ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png",
@@ -31,13 +32,17 @@ def load_last_folder():
     if os.path.exists(p):
         d = open(p, encoding="utf-8").read().strip()
         if os.path.isdir(d):
-            STATE["folder"] = d
+            try:
+                STATE["folder"] = ss.use_folder(d)
+            except ss.Fehler:
+                pass
 
 
 def set_folder(d):
     d = ss.check_folder(d)
-    STATE["folder"] = d
-    open(ss.LAST_FILE, "w", encoding="utf-8").write(d)
+    stop_prep()
+    STATE["folder"] = ss.use_folder(d)
+    PREP.update(folder=None, done=False, error=None, label="", frac=0.0, i=0, n=0)
 
 
 def find_file(folder, names):
@@ -77,7 +82,8 @@ def folder_state():
     results = sorted(f for f in files if f.lower().endswith(("_einsatzzeit.mp4", "_highlights.mp4"))
                      and ".tmp." not in f.lower())
     return {"path": d, "name": os.path.basename(d), "videos": vids, "results": results,
-            "korrekturen": os.path.exists(os.path.join(d, "korrekturen.txt"))}
+            "korrekturen": os.path.exists(os.path.join(d, "korrekturen.txt")),
+            "bild_gesetzt": os.path.exists(os.path.join(d, ss.BILD_FILE))}
 
 
 def load_fixes():
@@ -92,7 +98,7 @@ def schnitt(name):
     fp = os.path.join(STATE["folder"], ss.FIX_FILE)
     stale = bool(data) and os.path.exists(fp) and os.path.getmtime(fp) > os.path.getmtime(p)
     return {"schnitt": data, "fixes": [f for f in load_fixes() if f["name"] == name],
-            "crop_w": ss.CROP_W, "crop_y": ss.CROP_Y, "stale": stale}
+            "bild": ss.load_bild(STATE["folder"]), "stale": stale}
 
 
 def save_fixes(name, items):
@@ -199,6 +205,83 @@ def _frac(f):
 ss.HOOKS.update(say=_log, step=_step, frac=_frac)
 
 
+# ---------------------------------------------------------------- Vorbereitung im Hintergrund
+# Startet, sobald ein Spielordner gewaehlt ist: Sichtkopien (nur wenn der Browser die Originale
+# nicht abspielen kann) und Bewegungsmessung aller Videos. So ist am Ende kaum noch Wartezeit.
+PREP = {"running": False, "folder": None, "need_sicht": None, "label": "", "i": 0, "n": 0, "frac": 0.0,
+        "error": None, "done": False}
+PREP_CANCEL = threading.Event()
+PREP_THREAD = {"t": None}
+
+
+def _prep_items(folder):
+    """Naechste Aufgabe: zuerst fehlende Sichtkopien (falls noetig), dann Bewegungsmessungen."""
+    P = {"work": ss.WORK, "bild": ss.load_bild(folder)}
+    vids = ss.originals(folder)
+    todo = []
+    if PREP["need_sicht"]:
+        todo += [("sicht", v) for v in vids
+                 if not os.path.exists(os.path.join(folder, ss.sicht_path(P, os.path.splitext(v)[0].upper())))]
+    todo += [("motion", v) for v in vids
+             if not os.path.exists(os.path.join(folder, ss.motion_cache(P, os.path.splitext(v)[0].upper(), P["bild"])))]
+    return P, todo
+
+
+def _prep_worker(folder):
+    def step(i, n, label):
+        PREP.update(label=label, frac=0.0)
+
+    ss.set_thread_context({"say": None, "step": step, "frac": lambda f: PREP.update(frac=f)}, PREP_CANCEL)
+    try:
+        os.makedirs(os.path.join(folder, ss.WORK), exist_ok=True)
+        done = 0
+        while not PREP_CANCEL.is_set():
+            P, todo = _prep_items(folder)
+            if not todo:
+                PREP["done"] = True
+                break
+            kind, v = todo[0]
+            PREP.update(i=done, n=done + len(todo), frac=0.0,
+                        label=("Sichtkopie " if kind == "sicht" else "Bewegung messen ") + os.path.splitext(v)[0].upper())
+            if kind == "sicht":
+                ss.make_sicht(P, v)
+            else:
+                ss.motion_full(P, v, P["bild"])
+            done += 1
+    except ss.Abgebrochen:
+        pass
+    except Exception as e:
+        PREP["error"] = f"{type(e).__name__}: {e}"
+        traceback.print_exc()
+    finally:
+        PREP["running"] = False
+
+
+def start_prep(need_sicht=None):
+    """Vorbereitung (neu) anstossen. Laeuft sie schon, nimmt sie neue Aufgaben von selbst mit."""
+    if need_sicht is not None:
+        PREP["need_sicht"] = bool(need_sicht)
+    d = STATE["folder"]
+    if not d or (JOB["running"] and JOB["kind"] == "videos"):
+        return
+    PREP.update(done=False, error=None)
+    if PREP["running"]:
+        return
+    PREP_CANCEL.clear()
+    PREP.update(running=True, folder=d)
+    t = threading.Thread(target=_prep_worker, args=(d,), daemon=True)
+    PREP_THREAD["t"] = t
+    t.start()
+
+
+def stop_prep():
+    if PREP["running"]:
+        PREP_CANCEL.set()
+        t = PREP_THREAD["t"]
+        if t:
+            t.join(15)
+
+
 def worker(kind, folder):
     try:
         ss._probe.clear()
@@ -230,6 +313,8 @@ def start_job(kind):
         return "Es laeuft schon etwas."
     if not STATE["folder"]:
         return "Bitte zuerst einen Spielordner auswaehlen."
+    if kind == "videos":
+        stop_prep()
     ss.CANCEL.clear()
     JOB.update(kind=kind, running=True, log=[], label="Geht gleich los ...", i=0, n=1, frac=0.0,
                error=None, result=None, started=time.time(), ended=0.0)
@@ -318,7 +403,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/state":
             with LOCK:
                 job = dict(JOB, log=JOB["log"][-60:])
-            return self._json({"folder": folder_state(), "job": job,
+            return self._json({"version": VERSION, "folder": folder_state(), "job": job, "prep": dict(PREP),
                                "ffmpeg": bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))})
         if u.path == "/api/log":
             with LOCK:
@@ -330,6 +415,37 @@ class Handler(BaseHTTPRequestHandler):
             mk = find_file(STATE["folder"], [f"marker_{name}.txt"])
             text = ss.read_text(os.path.join(STATE["folder"], mk)) if mk else None
             return self._json({"text": text})
+        if u.path == "/api/frame":
+            name = (q.get("name") or [""])[0].upper()
+            src = next((v for v in ss.originals(STATE["folder"]) if os.path.splitext(v)[0].upper() == name),
+                       None) if STATE["folder"] else None
+            if not src:
+                return self._json({"error": "nicht gefunden"}, 404)
+            try:
+                t = float((q.get("t") or ["0"])[0])
+                jpg = ss.frame_jpeg(os.path.join(STATE["folder"], src), t, 1280)
+            except (ValueError, ss.Fehler):
+                return self._json({"error": "Standbild nicht moeglich"}, 500)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(jpg)))
+            self.send_header("Cache-Control", "max-age=3600")
+            self.end_headers()
+            self.wfile.write(jpg)
+            return
+        if u.path == "/api/bild":
+            if not STATE["folder"]:
+                return self._json({"error": "Kein Ordner"}, 400)
+            vids = []
+            for v in ss.originals(STATE["folder"]):
+                try:
+                    dur, w, h = ss.probe(os.path.join(STATE["folder"], v))
+                except ss.Fehler:
+                    continue
+                vids.append({"name": os.path.splitext(v)[0].upper(), "dur": dur, "w": w, "h": h})
+            return self._json({"bild": ss.load_bild(STATE["folder"]), "standard": ss.BILD_DEFAULT,
+                               "gesetzt": os.path.exists(os.path.join(STATE["folder"], ss.BILD_FILE)),
+                               "videos": vids})
         if u.path == "/api/schnitt":
             name = (q.get("name") or [""])[0]
             if not re.fullmatch(r"[\w\-]+", name) or not STATE["folder"]:
@@ -381,6 +497,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"error": "Bitte warten, bis der Computer fertig ist."})
                 save_fixes(name, b["fixes"])
                 return self._json({"ok": True, **schnitt(name)})
+            if u.path == "/api/bild":
+                if not STATE["folder"] or not isinstance(b.get("bild"), dict):
+                    return self._json({"error": "Ungueltig"}, 400)
+                if JOB["running"]:
+                    return self._json({"error": "Bitte warten, bis der Computer fertig ist."})
+                bild = ss.save_bild(b["bild"], STATE["folder"])
+                start_prep()                       # Bewegung fuer den neuen Ausschnitt messen
+                return self._json({"ok": True, "bild": bild})
+            if u.path == "/api/prepare":
+                start_prep(b.get("need_sicht"))
+                return self._json({"ok": True})
             if u.path == "/api/open":
                 d = STATE["folder"]
                 if not d:

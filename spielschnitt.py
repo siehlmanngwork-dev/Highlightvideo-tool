@@ -2,14 +2,16 @@
 """
 spielschnitt.py - Einsatzzeit- und Highlight-Videos aus GoPro-Basketballaufnahmen.
 
-Aufruf (normalerweise ueber die .bat-Dateien):
-    python spielschnitt.py sichtkopien [Spielordner]   kleine Sichtkopien zum Markieren
+Normalerweise ueber die Desktop-App (Spielschnitt.pyw). Kommandozeile:
+    python spielschnitt.py sichtkopien [Spielordner]   kleine Sichtkopien (nur noetig, wenn der
+                                                       Browser die Originale nicht abspielen kann)
     python spielschnitt.py vorschau    [Spielordner]   Vorschau der Einsatzzeit (optional)
     python spielschnitt.py videos      [Spielordner]   Einsatzzeit- und Highlight-Video
 
 Ohne Ordnerangabe erscheint ein Auswahldialog. Bearbeitet werden NUR die Videos
 in diesem Spielordner. Ein-/Auswechslungen und Highlights kommen aus den
-Marker-Dateien (marker_<Video>.txt), die Marker.html in den Spielordner speichert.
+Marker-Dateien (marker_<Video>.txt), den Bildausschnitt aus bildausschnitt.json und
+Korrekturen aus korrekturen.txt - alle drei schreibt die App in den Spielordner.
 Am Ende enthaelt der Spielordner nur die Originale, <Ordner>_Einsatzzeit.mp4
 und <Ordner>_Highlights.mp4. Braucht nur Python (Standardbibliothek) und ffmpeg/ffprobe im PATH.
 Originalvideos werden nie veraendert.
@@ -20,7 +22,6 @@ import hashlib, json, math, os, re, shutil, subprocess, sys, threading, time
 LENS = "lenscorrection=k1=-0.15:k2=-0.02:i=bilinear"   # GoPro-Fischauge
 CROP_W = 0.5625          # Ausschnittbreite relativ zur Bildbreite (16:9-Fenster)
 CROP_Y = 0.0972          # obere Kante des Ausschnitts relativ zur Bildhoehe
-STRIP = (0.24, 0.37)     # Spielfeldstreifen fuer die Bewegungsmessung (y-Start, Hoehe)
 ANA_FPS = 10             # Analyse-Bildrate
 COLS = 64                # Spalten der Bewegungsmessung
 CAM_SIGMA = 0.8          # Glaettung Kamerabahn in Sekunden
@@ -55,18 +56,32 @@ class Abgebrochen(Fehler):
 # Haken fuer die Desktop-App (app/server.py). Auf der Kommandozeile bleiben sie leer.
 HOOKS = {"say": None, "step": None, "frac": None}
 CANCEL = threading.Event()
+# Ein Hintergrund-Thread (Vorbereitung) kann eigene Haken und ein eigenes Abbruch-Signal setzen.
+_TLS = threading.local()
+
+
+def _hook(name):
+    return (getattr(_TLS, "hooks", None) or HOOKS).get(name)
+
+
+def _cancel():
+    return getattr(_TLS, "cancel", None) or CANCEL
+
+
+def set_thread_context(hooks, cancel):
+    _TLS.hooks, _TLS.cancel = hooks, cancel
 
 
 def say(*a):
     print(*a, flush=True)
-    if HOOKS["say"]:
-        HOOKS["say"](" ".join(str(x) for x in a))
+    if _hook("say"):
+        _hook("say")(" ".join(str(x) for x in a))
 
 
 def step(i, n, label):
     """Fortschritt: Schritt i (0-basiert) von n, z.B. Teil 3 von 12."""
-    if HOOKS["step"]:
-        HOOKS["step"](i, n, label)
+    if _hook("step"):
+        _hook("step")(i, n, label)
 
 
 def die(msg):
@@ -79,33 +94,56 @@ def need_tools():
             die(f"{t} wurde nicht gefunden. Bitte ffmpeg installieren und in den PATH aufnehmen.")
 
 
-def _exec(cmd, total):
-    """Prozess starten; abbrechbar ueber CANCEL; meldet Fortschritt, wenn total (Sekunden) bekannt."""
-    if CANCEL.is_set():
+_TIME_RE = re.compile(rb"time=(\d+):(\d+):([\d.]+)")
+
+
+def _exec(cmd, total, data=False):
+    """Prozess starten; abbrechbar ueber CANCEL; meldet Fortschritt, wenn total (Sekunden) bekannt.
+    data=True: stdout liefert Nutzdaten, der Fortschritt kommt dann aus der Statuszeile auf stderr."""
+    cancel, frac = _cancel(), _hook("frac")
+    if cancel.is_set():
         raise Abgebrochen("Abgebrochen.")
-    if total and cmd[0] == "ffmpeg":
+    stats = bool(total and cmd[0] == "ffmpeg" and data)
+    if stats:
+        cmd = [cmd[0], "-stats", "-stats_period", "1"] + cmd[1:]
+    elif total and cmd[0] == "ffmpeg":
         cmd = [cmd[0], "-progress", "pipe:1", "-nostats"] + cmd[1:]
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags)
     out, err = [], []
 
+    def read_err():
+        if not stats:
+            err.append(p.stderr.read())
+            return
+        while True:
+            chunk = p.stderr.read1(4096) if hasattr(p.stderr, "read1") else p.stderr.read(4096)
+            if not chunk:
+                break
+            err.append(chunk)
+            m = None
+            for m in _TIME_RE.finditer(chunk):
+                pass
+            if m and frac:
+                frac(min(1.0, (int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))) / total))
+
     def read_out():
-        if total and cmd[0] == "ffmpeg":
+        if total and cmd[0] == "ffmpeg" and not stats:
             for line in p.stdout:
-                if line.startswith(b"out_time_us=") and HOOKS["frac"]:
+                if line.startswith(b"out_time_us=") and frac:
                     try:
-                        HOOKS["frac"](min(1.0, int(line[12:]) / 1e6 / total))
+                        frac(min(1.0, int(line[12:]) / 1e6 / total))
                     except ValueError:
                         pass
         else:
             out.append(p.stdout.read())
 
     th = [threading.Thread(target=read_out, daemon=True),
-          threading.Thread(target=lambda: err.append(p.stderr.read()), daemon=True)]
+          threading.Thread(target=read_err, daemon=True)]
     for t in th:
         t.start()
     while p.poll() is None:
-        if CANCEL.wait(0.3):
+        if cancel.wait(0.3):
             p.kill()
             p.wait()
             raise Abgebrochen("Abgebrochen.")
@@ -114,14 +152,14 @@ def _exec(cmd, total):
     return p.returncode, b"".join(out), b"".join(err)
 
 
-def run(cmd, log=None, total=None):
+def run(cmd, log=None, total=None, data=False):
     """ffmpeg/ffprobe ausfuehren; Fehlerausgabe in Logdatei.
     Scheitert die Grafikkarten-Dekodierung, wird automatisch ohne sie wiederholt."""
-    code, out, err = _exec(cmd, total)
+    code, out, err = _exec(cmd, total, data)
     if code != 0 and "-hwaccel" in cmd:
         i = cmd.index("-hwaccel")
         cmd = cmd[:i] + cmd[i + 2:]
-        code, out, err = _exec(cmd, total)
+        code, out, err = _exec(cmd, total, data)
     if log:
         with open(log, "ab") as f:
             f.write(b"\n>>> " + " ".join(cmd).encode("utf-8", "replace") + b"\n" + err[-4000:])
@@ -244,7 +282,7 @@ def load_plan(folder):
         die("Keine Videodateien (.MP4) im Spielordner gefunden.")
     base = re.sub(r"[^\w\-]+", "_", os.path.basename(folder)).strip("_") or "Spiel"
     os.makedirs(WORK, exist_ok=True)
-    P = {"base": base, "out": ".", "work": WORK, "fixes": [], "quarters": []}
+    P = {"base": base, "out": ".", "work": WORK, "fixes": [], "quarters": [], "bild": load_bild()}
     if os.path.exists(FIX_FILE):
         P["fixes"] = parse_fixes(read_text(FIX_FILE))
     missing = []
@@ -318,6 +356,66 @@ def is_weit(q, a, b):
     return any(w[0] <= mid < w[1] for w in q.get("weit", []))
 
 
+# ---------------------------------------------------------------- Bildausschnitt pro Spiel
+# bildausschnitt.json im Spielordner (wird von der App geschrieben). Alle Werte relativ zum
+# entzerrten Originalbild: crop_w = Breite des 16:9-Fensters, crop_y = obere Kante,
+# x_min/x_max = Bereich, in dem sich das Fenster (die "Kamera") bewegen darf.
+BILD_FILE = "bildausschnitt.json"
+BILD_DEFAULT = {"crop_w": CROP_W, "crop_y": CROP_Y, "x_min": 0.0, "x_max": 1.0}
+
+
+def clean_bild(b, aspect=16 / 9):
+    """Werte begrenzen: Fenster passt ins Bild, Bewegungsbereich mindestens so breit wie das Fenster."""
+    out = dict(BILD_DEFAULT)
+    for k in out:
+        try:
+            out[k] = float(b.get(k, out[k]))
+        except (TypeError, ValueError, AttributeError):
+            pass
+    cw = min(1.0, max(0.25, out["crop_w"]))
+    chf = min(1.0, cw * aspect * 9 / 16)                 # Fensterhoehe relativ zur Bildhoehe
+    cy = min(1.0 - chf, max(0.0, out["crop_y"]))
+    x0, x1 = sorted((min(1.0, max(0.0, out["x_min"])), min(1.0, max(0.0, out["x_max"]))))
+    if x1 - x0 < cw:                                     # Bereich zu schmal: um seine Mitte auf Fensterbreite
+        m = min(1.0 - cw / 2, max(cw / 2, (x0 + x1) / 2))
+        x0, x1 = m - cw / 2, m + cw / 2
+    return {"crop_w": round(cw, 4), "crop_y": round(cy, 4), "x_min": round(x0, 4), "x_max": round(x1, 4)}
+
+
+def load_bild(folder="."):
+    p = os.path.join(folder, BILD_FILE)
+    if os.path.exists(p):
+        try:
+            return clean_bild(json.load(open(p, encoding="utf-8")))
+        except (ValueError, OSError):
+            pass
+    return dict(BILD_DEFAULT)
+
+
+def save_bild(b, folder="."):
+    b = clean_bild(b)
+    with open(os.path.join(folder, BILD_FILE), "w", encoding="utf-8") as f:
+        json.dump(b, f)
+    return b
+
+
+def bild_key(b):
+    """Teil des Cache-/Render-Schluessels; leer bei Standardwerten (alte Ergebnisse bleiben gueltig)."""
+    return [] if b == BILD_DEFAULT else [b]
+
+
+def window(P, W, H):
+    """Kamerafenster in Pixeln: Breite, Hoehe, obere Kante, kleinste und groesste linke Kante."""
+    b = P.get("bild") or BILD_DEFAULT
+    cw = int(W * b["crop_w"]) // 2 * 2
+    ch = min(H, int(cw * 9 / 16)) // 2 * 2
+    cy = max(0, min(H - ch, int(H * b["crop_y"]))) // 2 * 2
+    lo, hi = b["x_min"] * W, b["x_max"] * W - cw
+    if hi < lo:
+        lo = hi = (lo + hi) / 2
+    return cw, ch, cy, max(0, int(lo)), max(0, min(W - cw, int(hi)))
+
+
 def find_marker(P, name):
     want = f"marker_{name}.txt".lower()
     for d in (".", P["work"]):
@@ -370,8 +468,21 @@ def sicht_path(P, name):
     return os.path.join(P["work"], f"sicht_{name}.mp4")
 
 
+_LOCKS, _LOCKS_LOCK = {}, threading.Lock()
+
+
+def _lock(key):
+    with _LOCKS_LOCK:
+        return _LOCKS.setdefault(key, threading.Lock())
+
+
 def make_sicht(P, src):
     name = os.path.splitext(src)[0].upper()
+    with _lock("sicht_" + name):
+        _make_sicht(P, src, name)
+
+
+def _make_sicht(P, src, name):
     out = sicht_path(P, name)
     if os.path.exists(out):
         say(f"  {name}: Sichtkopie vorhanden.")
@@ -385,35 +496,65 @@ def make_sicht(P, src):
     os.replace(tmp, out)
 
 
+def motion_cache(P, name, bild):
+    k = hashlib.md5(json.dumps(bild, sort_keys=True).encode()).hexdigest()[:8]
+    return os.path.join(P["work"], f"bewegung_{name}_{k}.json")
+
+
+def motion_full(P, src, bild=None):
+    """Bewegung je Analysebild fuer das ganze Video: [Energie, Schwerpunkt 0..1 der Bildbreite].
+    Nutzt die Sichtkopie, falls vorhanden, sonst das Original. Wird zwischengespeichert."""
+    name = os.path.splitext(src)[0].upper()
+    bild = bild or P.get("bild") or BILD_DEFAULT
+    cache = motion_cache(P, name, bild)
+    with _lock("motion_" + name):
+        if os.path.exists(cache):
+            return json.load(open(cache))
+        sicht = sicht_path(P, name)
+        if os.path.exists(sicht):
+            inp, hw, pre = sicht, [], ""
+        else:                                            # Original: frueh verkleinern, spart viel Zeit
+            inp, hw, pre = src, ["-hwaccel", "auto"], "scale=960:-2,"
+        chf = min(1.0, bild["crop_w"] * 16 / 9 * 9 / 16)
+        y0 = min(0.98, bild["crop_y"] + 0.25 * chf)
+        hh = max(0.02, min(1.0 - y0, 0.66 * chf))
+        x0, xw = bild["x_min"], max(0.05, bild["x_max"] - bild["x_min"])
+        vf = (f"fps={ANA_FPS},{pre}{LENS},crop=iw*{xw:.4f}:ih*{hh:.4f}:iw*{x0:.4f}:ih*{y0:.4f},format=gray,"
+              f"tblend=all_mode=difference,lutyuv=y=if(gt(val\\,12)\\,val\\,0),scale={COLS}:1:flags=area")
+        say(f"  {name}: Bewegung wird gemessen ...")
+        raw = run(["ffmpeg", "-v", "error", *hw, "-i", inp, "-vf", vf, "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                  os.path.join(P["work"], "log.txt"), total=probe(src)[0], data=True)
+        res = []
+        for i in range(0, len(raw) - COLS + 1, COLS):
+            c = raw[i:i + COLS]
+            tot = sum(c)
+            if tot < 3:
+                res.append([tot, None])
+                continue
+            acc, cx = 0, 0.5
+            for j, v in enumerate(c):
+                acc += v
+                if acc >= tot / 2:
+                    cx = (j + 0.5) / COLS
+                    break
+            res.append([tot, round(x0 + cx * xw, 4)])     # zurueck auf die ganze Bildbreite
+        tmp = cache + ".tmp"
+        json.dump(res, open(tmp, "w"))
+        os.replace(tmp, cache)
+        return res
+
+
+def frame_jpeg(src, t, width=1280):
+    """Ein entzerrtes Standbild (JPEG) aus dem Original, z.B. fuer den Bildausschnitt-Editor."""
+    return run(["ffmpeg", "-v", "error", "-ss", f"{max(0.0, t):.2f}", "-i", src, "-frames:v", "1",
+                "-vf", f"scale={width * 2}:-2,{LENS},scale={width}:-2", "-q:v", "4",
+                "-f", "image2pipe", "-vcodec", "mjpeg", "-"])
+
+
 def motion(P, q, s, e):
-    """Bewegung je Analysebild: [Energie, Schwerpunkt 0..1]. Wird zwischengespeichert."""
-    cache = os.path.join(P["work"], f"bewegung_{q['name']}_{int(s * 10)}_{int(e * 10)}.json")
-    if os.path.exists(cache):
-        return json.load(open(cache))
-    src = sicht_path(P, q["name"])
-    if not os.path.exists(src):
-        make_sicht(P, q["src"])
-    y0, hh = STRIP
-    vf = (f"fps={ANA_FPS},{LENS},crop=iw:ih*{hh}:0:ih*{y0},format=gray,"
-          f"tblend=all_mode=difference,lutyuv=y=if(gt(val\\,12)\\,val\\,0),scale={COLS}:1:flags=area")
-    raw = run(["ffmpeg", "-v", "error", "-ss", f"{s:.2f}", "-t", f"{e - s:.2f}", "-i", src, "-vf", vf,
-               "-f", "rawvideo", "-pix_fmt", "gray", "-"])
-    res = []
-    for i in range(0, len(raw) - COLS + 1, COLS):
-        c = raw[i:i + COLS]
-        tot = sum(c)
-        if tot < 3:
-            res.append([tot, None])
-            continue
-        acc, cx = 0, 0.5
-        for j, v in enumerate(c):
-            acc += v
-            if acc >= tot / 2:
-                cx = (j + 0.5) / COLS
-                break
-        res.append([tot, cx])
-    json.dump(res, open(cache, "w"))
-    return res
+    """Bewegung je Analysebild im Abschnitt s..e (aus der Messung des ganzen Videos)."""
+    full = motion_full(P, q["src"])
+    return full[int(round(s * ANA_FPS)):int(round(e * ANA_FPS))]
 
 
 def analyse(P, q):
@@ -482,7 +623,7 @@ def analyse(P, q):
 
 
 # ---------------------------------------------------------------- Rendern
-def cam_file(P, q, seg, cams, W, cw, tag):
+def cam_file(P, q, seg, cams, W, cw, tag, lo=0, hi=None):
     """sendcmd-Datei: eine Kameraposition pro Bild."""
     a, b, s0 = seg
     path = cams.get(s0) or [0.5]
@@ -495,10 +636,11 @@ def cam_file(P, q, seg, cams, W, cw, tag):
         v1 = path[min(len(path) - 1, max(0, i + 1))]
         xs.append(v0 + (v1 - v0) * u)
     xs = gauss(xs, 5)
+    hi = W - cw if hi is None else hi
     fn = os.path.join(P["work"], f"kamera_{q['q']}_{tag}_{int(a * 10)}.txt")
     with open(fn, "w") as f:
         for k, c in enumerate(xs):
-            f.write(f"{k / fps:.4f} crop x {max(0, min(W - cw, round(c * W - cw / 2)))};\n")
+            f.write(f"{k / fps:.4f} crop x {max(lo, min(hi, round(c * W - cw / 2)))};\n")
     return fn.replace("\\", "/")
 
 
@@ -509,9 +651,14 @@ def render(P, q, segs, cams, mode, label=True):
     for i, seg in enumerate(segs):
         a, b, s0 = seg
         out = os.path.join(P["work"], f"{q['q']}_{mode}_{i:03d}.mp4")
-        if mode == "vorschau":
-            W, H, src = 1920, 1080, sicht_path(P, q["name"])
-            pre, post, hw = f"{LENS},scale={W}:{H}", "scale=854:480", []
+        if mode == "vorschau":                         # klein: aus der Sichtkopie, sonst aus dem Original
+            sicht = sicht_path(P, q["name"])
+            W, H = 1920, int(1920 * q["h"] / q["w"]) // 2 * 2
+            if os.path.exists(sicht):
+                src, pre, hw = sicht, f"{LENS},scale={W}:{H}", []
+            else:
+                src, pre, hw = q["src"], f"scale={W}:{H},{LENS}", ["-hwaccel", "auto"]
+            post = "scale=854:480"
             if fnt:
                 post += (f",drawtext=fontfile='{fnt}':text='{q['q']} {q['name']} %{{pts\\:hms\\:{a}}}':"
                          "x=8:y=8:fontsize=18:fontcolor=yellow:box=1:boxcolor=black@0.6")
@@ -521,15 +668,13 @@ def render(P, q, segs, cams, mode, label=True):
             pre, post, hw = LENS, "scale=1920:1080:flags=lanczos", ["-hwaccel", "auto"]
             enc = ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
                    "-c:a", "aac", "-b:a", "256k", "-ar", "48000"]
+        cw, ch, cy, lo, hi = window(P, W, H)           # Bildausschnitt dieses Spiels
         if is_weit(q, a, b):                           # ganzes Bild, kein Kameraschwenk
             cw = W // 2 * 2
             ch = min(H, int(cw * 9 / 16)) // 2 * 2
-            cy = max(0, min(H - ch, int(H * CROP_Y))) // 2 * 2
-        else:
-            cw = int(W * CROP_W) // 2 * 2
-            ch = int(cw * 9 / 16) // 2 * 2
-            cy = int(H * CROP_Y) // 2 * 2
-        cf = cam_file(P, q, seg, cams, W, cw, mode)
+            cy = max(0, min(H - ch, cy)) // 2 * 2
+            lo = hi = 0
+        cf = cam_file(P, q, seg, cams, W, cw, mode, lo, hi)
         vf = f"{pre},sendcmd=f='{cf}',crop={cw}:{ch}:0:{cy},{post}"
         say(f"  {q['q']} {'Highlight' if mode == 'hl' else 'Teil'} {i + 1}/{len(segs)}  ({hms(a)}-{hms(b)})")
         what = {"vorschau": "Vorschau", "end": "Einsatzzeit", "hl": "Highlights"}[mode]
@@ -642,7 +787,7 @@ def prepare(P):
         q["segs"], q["cams"] = segs, cams
         # Kamera-Korrekturen veraendern das Bild, aber nicht die Schnitte -> eigener Teil im Schluessel
         ck = [[f["what"], f["a"], f["b"], f["pos"]] for f in fixes_for(P, q, "kamera", "weit")]
-        q["camkey"] = [ck] if ck else []
+        q["camkey"] = ([ck] if ck else []) + bild_key(P["bild"])
         write_report(P, q, segs)
         with open(os.path.join(P["work"], f"schnitt_{q['name']}.json"), "w", encoding="utf-8") as f:
             json.dump({"q": q["q"], "name": q["name"], "dur": q["dur"], "abs": q["abs"],
@@ -733,7 +878,7 @@ def cmd_videos(P):
     shutil.rmtree(WORK, ignore_errors=True)
     for f in os.listdir("."):
         fl = f.lower()
-        if (fl.startswith("marker_") and fl.endswith(".txt")) or fl == "korrekturen.txt" \
+        if (fl.startswith("marker_") and fl.endswith(".txt")) or fl in ("korrekturen.txt", BILD_FILE) \
                 or (fl.startswith("vorschau_") and (fl.endswith(".mp4") or fl.endswith(".plan"))) \
                 or (fl.startswith("schnittliste_") and fl.endswith(".txt")):
             try:
